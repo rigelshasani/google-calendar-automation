@@ -1,0 +1,33 @@
+# Google Calendar credentials and tokens
+credentials.json
+token.pickle
+client_secret*.json
+*.pickle
+
+# Personal configuration
+calendar_config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Personal schedule data
+my_schedule.py
+personal_schedule.py
