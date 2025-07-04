@@ -65,6 +65,10 @@ jobs:
           echo "Files created:"
           ls -la *.json *.py *.pickle
       
+      - name: Show loaded schedule
+        run: |
+          python -c "from my_schedule import schedule; print('Schedule loaded in CI:'); print(schedule)"
+
       - name: Run calendar update
         run: |
           python push_schedule.py
