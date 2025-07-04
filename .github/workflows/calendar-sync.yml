@@ -67,4 +67,4 @@ jobs:
       
       - name: Run calendar update
         run: |
-          python push_schedule.py --dry-run
+          python push_schedule.py
