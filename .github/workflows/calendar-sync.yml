@@ -3,7 +3,7 @@ name: Calendar Sync
 on:
   repository_dispatch:
     types: [calendar-sync]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -21,12 +21,22 @@ jobs:
         run: |
           pip install -r requirements.txt
       
-      - name: Run calendar sync
+      - name: Create config files
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          CALENDAR_CONFIG: ${{ secrets.CALENDAR_CONFIG }}
+          MY_SCHEDULE: ${{ secrets.MY_SCHEDULE }}
         run: |
-          # Create credentials file from secret
+          # Create files from secrets
           echo "$GOOGLE_CREDENTIALS" > credentials.json
+          echo "$CALENDAR_CONFIG" > calendar_config.json
+          echo "$MY_SCHEDULE" > my_schedule.py
           
-          # Run the sync
-          python push_schedule.py --sync --auto-reschedule
+          # List files to debug
+          echo "Files created:"
+          ls -la *.json *.py
+      
+      - name: Run calendar update
+        run: |
+          # Just run a dry-run to test
+          python push_schedule.py --dry-run
