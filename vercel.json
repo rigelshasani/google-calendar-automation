@@ -1,13 +1,7 @@
 {
   "functions": {
-    "api/webhook.py": {
-      "maxDuration": 60
+    "api/*.py": {
+      "runtime": "python3.9"
     }
-  },
-  "rewrites": [
-    {
-      "source": "/api/webhook",
-      "destination": "/api/webhook.py"
-    }
-  ]
+  }
 }
