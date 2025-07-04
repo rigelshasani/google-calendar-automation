@@ -21,32 +21,29 @@ jobs:
         run: |
           pip install -r requirements.txt
       
-      - name: Debug secrets
+      - name: Create config files
         env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
           CALENDAR_CONFIG: ${{ secrets.CALENDAR_CONFIG }}
           MY_SCHEDULE: ${{ secrets.MY_SCHEDULE }}
         run: |
-          # Check if secrets exist
-          echo "GOOGLE_CREDENTIALS length: ${#GOOGLE_CREDENTIALS}"
-          echo "CALENDAR_CONFIG length: ${#CALENDAR_CONFIG}"
-          echo "MY_SCHEDULE length: ${#MY_SCHEDULE}"
+          # Create service account file
+          echo "$SERVICE_ACCOUNT_KEY" > service-account-key.json
           
-          # Create files
-          echo "$GOOGLE_CREDENTIALS" > credentials.json
+          # ALSO create it as credentials.json for compatibility
+          echo "$SERVICE_ACCOUNT_KEY" > credentials.json
+          
+          # Create a dummy token.pickle to skip OAuth
+          python -c "import pickle; pickle.dump(None, open('token.pickle', 'wb'))"
+          
+          # Create other files
           echo "$CALENDAR_CONFIG" > calendar_config.json
           echo "$MY_SCHEDULE" > my_schedule.py
           
-          # Check file sizes
-          echo "File sizes:"
-          ls -la credentials.json calendar_config.json my_schedule.py
-          
-          # Show first few characters (safe for debugging)
-          echo "First 50 chars of credentials.json:"
-          head -c 50 credentials.json
-          echo -e "\n"
+          # Debug
+          echo "Files created:"
+          ls -la *.json *.py *.pickle
       
       - name: Run calendar update
         run: |
-          # Just run a dry-run to test
-          python push_schedule.py --dry-run || echo "Failed with code $?"
+          python push_schedule.py --dry-run
