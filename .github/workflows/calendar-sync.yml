@@ -1,49 +1,45 @@
-name: Calendar Sync
-
-on:
-  repository_dispatch:
-    types: [calendar-sync]
-  workflow_dispatch:
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
+- name: Create config files
+  env:
+    SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
+    CALENDAR_CONFIG: ${{ secrets.CALENDAR_CONFIG }}
+    MY_SCHEDULE: ${{ secrets.MY_SCHEDULE }}
+  run: |
+    # Create service account file
+    echo "$SERVICE_ACCOUNT_KEY" > service-account-key.json
     
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-      
-      - name: Create config files
-        env:
-          SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
-          CALENDAR_CONFIG: ${{ secrets.CALENDAR_CONFIG }}
-          MY_SCHEDULE: ${{ secrets.MY_SCHEDULE }}
-        run: |
-          # Create service account file
-          echo "$SERVICE_ACCOUNT_KEY" > service-account-key.json
-          
-          # ALSO create it as credentials.json for compatibility
-          echo "$SERVICE_ACCOUNT_KEY" > credentials.json
-          
-          # Create a dummy token.pickle to skip OAuth
-          python -c "import pickle; pickle.dump(None, open('token.pickle', 'wb'))"
-          
-          # Create other files
-          echo "$CALENDAR_CONFIG" > calendar_config.json
-          echo "$MY_SCHEDULE" > my_schedule.py
-          
-          # Debug
-          echo "Files created:"
-          ls -la *.json *.py *.pickle
-      
-      - name: Run calendar update
-        run: |
-          python push_schedule.py --dry-run
+    # Create other files
+    echo "$CALENDAR_CONFIG" > calendar_config.json
+    echo "$MY_SCHEDULE" > my_schedule.py
+    
+    # Create a Python script to generate token.pickle from service account
+    cat > create_token.py << 'EOF'
+    import pickle
+    import json
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request
+    
+    # Load service account
+    with open('service-account-key.json', 'r') as f:
+        service_account_info = json.load(f)
+    
+    # Create credentials
+    creds = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=['https://www.googleapis.com/auth/calendar']
+    )
+    
+    # Save as token.pickle (what push_schedule.py expects)
+    with open('token.pickle', 'wb') as token:
+        pickle.dump(creds, token)
+    
+    print("Created token.pickle from service account")
+    EOF
+    
+    # Run it to create token.pickle
+    python create_token.py
+    
+    # Don't create credentials.json - let it use token.pickle
+    
+    # Debug
+    echo "Files created:"
+    ls -la *.json *.py *.pickle
