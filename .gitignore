@@ -34,4 +34,4 @@ personal_schedule.py
 
 # ADD THESE - Security sensitive files
 service-account-key.json
-watch_info.json
+watch_info.json 
