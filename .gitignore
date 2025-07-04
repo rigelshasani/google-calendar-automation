@@ -4,7 +4,7 @@ token.pickle
 client_secret*.json
 *.pickle
 
-# Personal configuration
+# Personal configuration  
 calendar_config.json
 
 # Python
@@ -31,3 +31,7 @@ ENV/
 # Personal schedule data
 my_schedule.py
 personal_schedule.py
+
+# ADD THESE - Security sensitive files
+service-account-key.json
+watch_info.json
