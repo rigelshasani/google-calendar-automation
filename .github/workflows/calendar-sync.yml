@@ -8,67 +8,58 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-      
+
       - name: Create config files
         env:
           SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
-          CALENDAR_CONFIG: ${{ secrets.CALENDAR_CONFIG }}
-          MY_SCHEDULE: ${{ secrets.MY_SCHEDULE }}
+          CALENDAR_CONFIG:   ${{ secrets.CALENDAR_CONFIG }}
+          MY_SCHEDULE:       ${{ secrets.MY_SCHEDULE }}
         run: |
           # Create service account file
           echo "$SERVICE_ACCOUNT_KEY" > service-account-key.json
-          
+
           # Create other files
-          echo "$CALENDAR_CONFIG" > calendar_config.json
-          echo "$MY_SCHEDULE" > my_schedule.py
-          
-          # Create a Python script to generate token.pickle from service account
+          echo "$CALENDAR_CONFIG"  > calendar_config.json
+          echo "$MY_SCHEDULE"      > my_schedule.py
+
+          # Generate token.pickle from service account
           cat > create_token.py << 'EOF'
           import pickle
           import json
           from google.oauth2 import service_account
-          from google.auth.transport.requests import Request
-          
           # Load service account
           with open('service-account-key.json', 'r') as f:
               service_account_info = json.load(f)
-          
-          # Create credentials
+
+            # Create credentials
           creds = service_account.Credentials.from_service_account_info(
-              service_account_info,
+              info,
               scopes=['https://www.googleapis.com/auth/calendar']
           )
-          
-          # Save as token.pickle (what push_schedule.py expects)
-          with open('token.pickle', 'wb') as token:
-              pickle.dump(creds, token)
-          
-          print("Created token.pickle from service account")
+
+          with open('token.pickle','wb') as t:
+              pickle.dump(creds, t)
           EOF
-          
-          # Run it to create token.pickle
+
           python create_token.py
-          
-          # Debug
           echo "Files created:"
           ls -la *.json *.py *.pickle
-      
+
       - name: Show loaded schedule
         run: |
           python -c "from my_schedule import schedule; print('Schedule loaded in CI:'); print(schedule)"
 
       - name: Run calendar update
         run: |
-          python push_schedule.py
+          python push_schedule.py --sync --auto-reschedule
