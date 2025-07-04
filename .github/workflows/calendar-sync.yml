@@ -1,0 +1,32 @@
+name: Calendar Sync
+
+on:
+  repository_dispatch:
+    types: [calendar-sync]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Run calendar sync
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          # Create credentials file from secret
+          echo "$GOOGLE_CREDENTIALS" > credentials.json
+          
+          # Run the sync
+          python push_schedule.py --sync --auto-reschedule
