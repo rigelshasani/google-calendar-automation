@@ -166,10 +166,7 @@ def get_calendar_service():
         with open(token_file, "wb") as token:
             pickle.dump(creds, token)
     
-        # Add timeout to all API calls
-    http = Http(timeout=30)
-    return build("calendar", "v3", credentials=creds, 
-                 http=http, cache_discovery=False)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
 def iso(dt: datetime) -> str:
     """Convert datetime to ISO format string"""
@@ -258,10 +255,26 @@ def parse_datetime(dt_string: str, timezone_str: str) -> datetime:
         dt = dt.astimezone(tz.gettz(timezone_str))
     
     return dt
-def events_overlap(event1_start: datetime, event1_end: datetime, 
-                  event2_start: datetime, event2_end: datetime) -> bool:
-    """Check if two events overlap"""
-    return event1_start < event2_end and event2_start < event1_end
+
+def events_overlap(
+    start1: datetime,
+    end1: datetime,
+    start2: datetime,
+    end2: datetime,
+    *,
+    min_minutes: int = 0,            # treat overlaps shorter than this as “no conflict”
+) -> bool:
+    """
+    Return True if the two intervals overlap for at least `min_minutes`.
+
+    Example:
+        # 15-minute clash, but we only care about ≥30-minute overlaps
+        events_overlap(a_start, a_end, b_start, b_end, min_minutes=30)  -> False
+    """
+    latest_start  = max(start1, start2)
+    earliest_end  = min(end1, end2)
+    overlap       = (earliest_end - latest_start).total_seconds() / 60
+    return overlap >= min_minutes
 
 def is_scheduled_event(calendar_event: Dict, schedule_events: List) -> bool:
     """Check if a calendar event matches any scheduled event"""
@@ -276,127 +289,209 @@ def is_scheduled_event(calendar_event: Dict, schedule_events: List) -> bool:
     
     return False
 
-def detect_conflicts(calendar_events: List[Dict], schedule_events: List, 
-                    date: datetime, timezone_str: str) -> List[Dict]:
-    """Detect conflicts between manual calendar events and scheduled events"""
-    conflicts = []
-    
-    # Convert schedule events for this date to datetime objects
-    scheduled_for_date = []
-    for s in schedule_events:
-        title, y, m, d, sh, sm, eh, em = s
-        if y == date.year and m == date.month and d == date.day:
-            start = datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone_str))
-            end = datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone_str))
-            scheduled_for_date.append({
-                'title': title,
-                'start': start,
-                'end': end,
-                'original': s
-            })
-    
-    # Check each calendar event
-    for cal_event in calendar_events:
-        # Skip if it's one of our scheduled events
-        if is_scheduled_event(cal_event, schedule_events):
+# ──────────────────────────────────────────────────────────────────────
+# Replace the whole detect_conflicts definition with this one
+# ──────────────────────────────────────────────────────────────────────
+def detect_conflicts(
+    calendar_events: List[Dict],
+    schedule_events: List,
+    date: datetime,
+    timezone_str: str,
+) -> List[Dict]:
+    """
+    Return overlaps between *manual* calendar events and the fixed schedule
+    on `date`.  Ignores events that the script itself created.
+    """
+
+    # ---- 1. build fingerprints of every scheduled block ----------------
+    schedule_fps: Set[Tuple[str, str, str]] = set()
+    for title, y, m, d, sh, sm, eh, em in schedule_events:
+        st = datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone_str))
+        en = datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone_str))
+        schedule_fps.add((title, iso(st), iso(en)))
+
+    # ---- 2. keep only that day’s schedule as datetime objects ----------
+    sched_today = []
+    for title, y, m, d, sh, sm, eh, em in schedule_events:
+        if (y, m, d) != (date.year, date.month, date.day):
             continue
-        
-        # Parse calendar event times
-        cal_start = parse_datetime(cal_event["start"]["dateTime"], timezone_str)
-        cal_end = parse_datetime(cal_event["end"]["dateTime"], timezone_str)
-        
-        # Check against each scheduled event
-        for sched_event in scheduled_for_date:
-            if events_overlap(cal_start, cal_end, sched_event['start'], sched_event['end']):
-                conflicts.append({
-                    'manual_event': cal_event,
-                    'scheduled_event': sched_event,
-                    'manual_start': cal_start,
-                    'manual_end': cal_end
-                })
-    
+        st = datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone_str))
+        en = datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone_str))
+        sched_today.append({"title": title, "start": st, "end": en})
+
+    # ---- 3. compare each calendar item --------------------------------
+    conflicts = []
+    for cal in calendar_events:
+        # we only need start/end; title can be empty
+        if "start" not in cal or "end" not in cal:
+            continue
+
+        cal_title = cal.get("summary", "").replace("✓ ", "")   # default = ""
+        cal_start = parse_datetime(cal["start"]["dateTime"], timezone_str)
+        cal_end   = parse_datetime(cal["end"]["dateTime"],   timezone_str)
+
+        # skip our own scheduled items (exact fingerprint match)
+        if (cal_title, iso(cal_start), iso(cal_end)) in schedule_fps:
+            continue
+
+        # test against each fixed block
+        for sched in sched_today:
+            if events_overlap(
+                cal_start,
+                cal_end,
+                sched["start"],
+                sched["end"],
+                min_minutes=1,      # ignore <1-minute noise
+            ):
+                conflicts.append(
+                    {
+                        "manual_event": cal,
+                        "scheduled_event": sched,
+                        "manual_start": cal_start,
+                        "manual_end":   cal_end,
+                    }
+                )
     return conflicts
 
-def calculate_rescheduled_time(event: Dict, conflicts: List[Dict], 
-                             all_events: List[Dict], config: Dict, 
-                             timezone_str: str) -> Optional[Tuple[datetime, datetime]]:
-    """Calculate new time for an event considering conflicts and preferences"""
-    
-    buffer = config.get("conflict_resolution", {}).get("buffer_minutes", 30)
+
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+
+def calculate_rescheduled_time(
+    event: Dict,
+    conflicts: List[Dict],
+    all_events: List[Dict],
+    config: Dict,
+    timezone_str: str,
+    blocked: List[Tuple[datetime, datetime]],      # from handle_conflicts
+    schedule_titles: set,                          # ← pass {s[0] for s in schedule}
+) -> Optional[Tuple[datetime, datetime]]:
+    """
+    Find first legal slot for `event` after its conflicts.
+    Returns (new_start, new_end) or None if no slot fits.
+    """
+
+    buffer  = config.get("conflict_resolution", {}).get("buffer_minutes", 30)
     max_end = config.get("conflict_resolution", {}).get("max_end_time", "23:59")
-    
-    # Original event times
-    orig_start = event['start']
-    orig_end = event['end']
-    duration = orig_end - orig_start
-    
-    # Find the latest conflict end time
-    latest_conflict_end = max(c['manual_end'] for c in conflicts 
-                             if c['scheduled_event']['title'] == event['title'])
-    
-    # Proposed new start time (conflict end + buffer)
-    new_start = latest_conflict_end + timedelta(minutes=buffer)
-    new_end = new_start + duration
-    
-    # Special handling for Gym events
-    if "gym" in event['title'].lower():
-        gym_prefs = config.get("conflict_resolution", {}).get("gym_preferences", {})
-        try:
-            morning_end = datetime.strptime(gym_prefs.get("morning_end", "17:30"), "%H:%M").time()
-            evening_start = datetime.strptime(gym_prefs.get("evening_start", "19:30"), "%H:%M").time()
-        except ValueError:
-            # Handle invalid time format
-            morning_end = datetime.strptime("17:30", "%H:%M").time()
-            evening_start = datetime.strptime("19:30", "%H:%M").time()
-        
-        # If pushed past morning window, move to evening
-        if new_start.time() > morning_end and new_start.time() < evening_start:
-            new_start = new_start.replace(hour=evening_start.hour, minute=evening_start.minute)
-            new_end = new_start + duration
-    
-    # Fix: Parse max_end_time properly
-    max_end_dt = datetime.strptime(max_end, "%H:%M")
-    
-    # Check if we're crossing midnight
-    if new_end.date() > new_start.date():
-        # Event spans midnight - check if end time is before max
-        if new_end.time() > max_end_dt.time():
-            return None  # Too late (goes past max time on next day)
-    else:
-        # Same day - normal check
-        if new_end.time() > max_end_dt.time():
-            return None  # Too late
-    
-    # Check for conflicts with other events at the new time
-    for cal_event in all_events:
-        if "start" not in cal_event or "dateTime" not in cal_event["start"]:
+    duration = event["end"] - event["start"]
+
+    latest_end = max(c["manual_end"] for c in conflicts)
+    start = latest_end + timedelta(minutes=buffer)
+    end   = start + duration
+
+    # ----- helpers ----------------------------------------------------
+    max_end_t = datetime.strptime(max_end, "%H:%M").time()
+
+    def fixed_clashes(s: datetime, e: datetime) -> List[Tuple[datetime, datetime]]:
+        """Return (start,end) of calendar items that block this slot."""
+        blocking = []
+        for ev in all_events:
+            title = ev.get("summary", "").replace("✓ ", "")
+            # ignore every schedule block (they are flexible)
+            if title in schedule_titles:
+                continue
+            st = parse_datetime(ev["start"]["dateTime"], timezone_str)
+            en = parse_datetime(ev["end"]["dateTime"],   timezone_str)
+            if events_overlap(s, e, st, en, min_minutes=1):
+                blocking.append((st, en))
+        return blocking
+
+    # ----- search loop ------------------------------------------------
+    while True:
+        # midnight / max_end guard
+        if (end.date() == start.date() and end.time() > max_end_t) or (
+            end.date() > start.date() and end.time() > max_end_t
+        ):
+            return None
+
+        # clash with already-accepted moves?
+        if any(events_overlap(start, end, st, en, min_minutes=1) for st, en in blocked):
+            bump = max(en for st, en in blocked if events_overlap(start, end, st, en))
+            start = bump + timedelta(minutes=buffer)
+            end   = start + duration
             continue
-            
-        other_start = parse_datetime(cal_event["start"]["dateTime"], timezone_str)
-        other_end = parse_datetime(cal_event["end"]["dateTime"], timezone_str)
-        
-        # Add buffer to avoid back-to-back scheduling
-        if events_overlap(new_start - timedelta(minutes=5), 
-                         new_end + timedelta(minutes=5), 
-                         other_start, other_end):
-            # Try to push further
-            new_start = other_end + timedelta(minutes=buffer)
-            new_end = new_start + duration
-            
-            # Recheck gym preferences
-            if "gym" in event['title'].lower() and new_start.time() > morning_end and new_start.time() < evening_start:
-                new_start = new_start.replace(hour=evening_start.hour, minute=evening_start.minute)
-                new_end = new_start + duration
-            
-            # Recheck max end time with midnight crossing logic
-            if new_end.date() > new_start.date():
-                if new_end.time() > max_end_dt.time():
-                    return None
-            else:
-                if new_end.time() > max_end_dt.time():
-                    return None
-    
-    return (new_start, new_end)
+
+        # clash with fixed (non-schedule) calendar items?
+        blockers = fixed_clashes(start, end)
+        if blockers:
+            bump = min(en for st, en in blockers if en >= end)  # nearest gap
+            start = bump + timedelta(minutes=buffer)
+            end   = start + duration
+            continue
+
+        # slot is clear
+        return start, end
+
+
+    # advance until the slot becomes valid
+    while slot_invalid(new_start, new_end):
+        # push just past the nearest conflicting end
+        candidates = [new_end]
+
+        for ev in all_events:
+            if ev.get("summary", "").replace("✓ ", "") == event["title"]:
+                continue
+            st = parse_datetime(ev["start"]["dateTime"], timezone_str)
+            en = parse_datetime(ev["end"]["dateTime"],   timezone_str)
+            if events_overlap(new_start, new_end, st, en, min_minutes=1):
+                candidates.append(en)
+
+        for st, en in blocked:
+            if events_overlap(new_start, new_end, st, en, min_minutes=1):
+                candidates.append(en)
+
+        bump_point = min(c for c in candidates if c >= new_end)
+        new_start  = bump_point + timedelta(minutes=buffer)
+        new_end    = new_start + duration
+
+        # give up if we’re forced past max_end
+        if new_end.time() > max_end_t and new_end.date() == new_start.date():
+            return None
+
+    return new_start, new_end
+
+
+    # helper to test “legal” slot quickly
+    def slot_valid(start: datetime, end: datetime) -> bool:
+        # stay before max_end even if we spill past midnight
+        if end.date() > start.date() and end.time() > max_end_dt:
+            return False
+        if end.date() == start.date() and end.time() > max_end_dt:
+            return False
+        # clash with fixed calendar items?
+        for cal in all_events:
+            st = parse_datetime(cal["start"]["dateTime"], timezone_str)
+            en = parse_datetime(cal["end"]["dateTime"],   timezone_str)
+            if events_overlap(start, end, st, en, min_minutes=1):
+                return False
+        # clash with moves we have already accepted?
+        for st, en in blocked:
+            if events_overlap(start, end, st, en, min_minutes=1):
+                return False
+        return True
+
+    # advance until we find a valid gap
+    while not slot_valid(new_start, new_end):
+        # push to the later of: next conflicting item’s end OR current end
+        bump_to = max(
+            [new_end]
+            + [parse_datetime(cal["end"]["dateTime"], timezone_str) for cal in all_events
+               if events_overlap(new_start, new_end,
+                                 parse_datetime(cal["start"]["dateTime"], timezone_str),
+                                 parse_datetime(cal["end"]["dateTime"],   timezone_str),
+                                 min_minutes=1)]
+            + [en for st, en in blocked
+               if events_overlap(new_start, new_end, st, en, min_minutes=1)]
+        )
+        new_start = bump_to + timedelta(minutes=buffer)
+        new_end   = new_start + duration
+        # give up if we run past max_end
+        if not slot_valid(new_start, new_end):
+            if new_end.time() > max_end_dt:
+                return None
+
+    return new_start, new_end
+
 
 def create_event_batches(events: list, batch_size: int = 50) -> List[list]:
     """Split events into batches to avoid API limits"""
@@ -456,77 +551,111 @@ def mark_event_complete(service, event_id: str, event: dict, config: Dict) -> bo
         print(f"Error marking event complete: {e}")
         return False
 
-def handle_conflicts(service, conflicts: List[Dict], all_events: List[Dict], 
-                    schedule_events: List, config: Dict, timezone_str: str, 
-                    dry_run: bool = True) -> List[Dict]:
-    """Handle conflicts by rescheduling events"""
-    
+def handle_conflicts(
+    service,
+    conflicts: List[Dict],
+    all_events: List[Dict],
+    schedule_events: List,
+    config: Dict,
+    timezone_str: str,
+    dry_run: bool = True,
+) -> List[Dict]:
+    """Reschedule each fixed-schedule block so it no longer overlaps manual items."""
     if not conflicts:
         return []
-    
+
     print(f"\n⚠️  Found {len(conflicts)} conflicts:")
-    
-    # Group conflicts by scheduled event
-    conflicts_by_event = {}
-    for conflict in conflicts:
-        event_title = conflict['scheduled_event']['title']
-        if event_title not in conflicts_by_event:
-            conflicts_by_event[event_title] = []
-        conflicts_by_event[event_title].append(conflict)
-    
-    rescheduled = []
-    
-    for event_title, event_conflicts in conflicts_by_event.items():
-        scheduled_event = event_conflicts[0]['scheduled_event']
-        manual_event = event_conflicts[0]['manual_event']
-        
-        print(f"  - '{manual_event['summary']}' conflicts with '{event_title}'")
-        
-        # Calculate new time
-        new_times = calculate_rescheduled_time(scheduled_event, event_conflicts, 
-                                             all_events, config, timezone_str)
-        
-        if new_times:
-            new_start, new_end = new_times
-            print(f"    → Rescheduling '{event_title}' to {new_start.strftime('%H:%M')} - {new_end.strftime('%H:%M')}")
-            
-            if not dry_run:
-                # Find the existing calendar event to update
-                for cal_event in all_events:
-                    if (cal_event.get("summary", "").replace("✓ ", "") == event_title and
-                        "dateTime" in cal_event.get("start", {})):
-                        
-                        cal_start = parse_datetime(cal_event["start"]["dateTime"], timezone_str)
-                        if (cal_start.date() == scheduled_event['start'].date() and
-                            cal_start.hour == scheduled_event['start'].hour and
-                            cal_start.minute == scheduled_event['start'].minute):
-                            
-                            # Update the event
-                            cal_event["start"]["dateTime"] = iso(new_start)
-                            cal_event["end"]["dateTime"] = iso(new_end)
-                            
-                            try:
-                                api_call_with_retry(
-                                    lambda: service.events().update(
-                                        calendarId="primary",
-                                        eventId=cal_event["id"],
-                                        body=cal_event
-                                    ).execute()
-                                )
-                                
-                                rescheduled.append({
-                                    'title': event_title,
-                                    'old_start': scheduled_event['start'],
-                                    'new_start': new_start,
-                                    'new_end': new_end
-                                })
-                                print(f"    ✓ Rescheduled successfully")
-                            except Exception as e:
-                                print(f"    ✗ Error rescheduling: {e}")
-                            break
-        else:
-            print(f"    ✗ Cannot reschedule '{event_title}' within constraints")
-    
+
+    # ── 1. debug print ───────────────────────────────────────────────
+    for c in conflicts:
+        m  = c["manual_event"]
+        se = c["scheduled_event"]
+        ms = c["manual_start"].strftime("%H:%M")
+        me = c["manual_end"].strftime("%H:%M")
+        print(
+            f"\nDEBUG: Manual '{m.get('summary', 'No title')}' {ms}-{me}\n"
+            f"       Scheduled '{se['title']}' "
+            f"{se['start'].strftime('%H:%M')}-{se['end'].strftime('%H:%M')}"
+        )
+
+    # ── 2. group conflicts by schedule block ────────────────────────
+    by_title: Dict[str, List[Dict]] = {}
+    for c in conflicts:
+        by_title.setdefault(c["scheduled_event"]["title"], []).append(c)
+
+    # titles of every fixed schedule item (used to ignore them as blockers)
+    schedule_titles = {s[0] for s in schedule_events}
+
+    rescheduled: List[Dict] = []
+    accepted:   List[Tuple[datetime, datetime]] = []   # slots already placed
+
+    # ── 3. process blocks in chronological order ────────────────────
+    for title, ev_conflicts in sorted(
+        by_title.items(),
+        key=lambda item: item[1][0]["scheduled_event"]["start"],  # earliest first
+    ):
+        # ignore “self-conflicts”
+        real_conflicts = [
+            c for c in ev_conflicts
+            if c["manual_event"].get("summary", "").replace("✓ ", "") != title
+        ]
+        if not real_conflicts:
+            continue
+
+        scheduled_event = real_conflicts[0]["scheduled_event"]
+
+        new_times = calculate_rescheduled_time(
+            scheduled_event,
+            real_conflicts,
+            all_events,
+            config,
+            timezone_str,
+            blocked=accepted,           # already accepted moves
+            schedule_titles=schedule_titles,   # ignore flexible blocks
+        )
+
+        if not new_times:
+            print(f"    ✗ No free slot for '{title}'")
+            continue
+
+        new_start, new_end = new_times
+        accepted.append((new_start, new_end))
+        print(f"    → Moving '{title}' to {new_start.strftime('%H:%M')}–{new_end.strftime('%H:%M')}")
+
+        if dry_run:
+            rescheduled.append(
+                {"title": title, "old_start": scheduled_event["start"],
+                 "new_start": new_start, "new_end": new_end}
+            )
+            continue  # skip API updates
+
+        # ── 4. update Google Calendar entry ──────────────────────────
+        for cal_event in all_events:
+            if (
+                cal_event.get("summary", "").replace("✓ ", "") == title
+                and "dateTime" in cal_event.get("start", {})
+            ):
+                cal_start = parse_datetime(cal_event["start"]["dateTime"], timezone_str)
+                if cal_start == scheduled_event["start"]:
+                    cal_event["start"]["dateTime"] = iso(new_start)
+                    cal_event["end"]["dateTime"]   = iso(new_end)
+                    try:
+                        api_call_with_retry(
+                            lambda: service.events()
+                            .update(calendarId="primary", eventId=cal_event["id"], body=cal_event)
+                            .execute()
+                        )
+                        rescheduled.append(
+                            {"title": title,
+                             "old_start": scheduled_event["start"],
+                             "new_start": new_start,
+                             "new_end": new_end}
+                        )
+                        print("    ✓ Rescheduled successfully")
+                    except Exception as exc:
+                        print(f"    ✗ API error: {exc}")
+                    break
+
     return rescheduled
 
 # ─────────────────── MAIN ───────────────────
@@ -550,7 +679,8 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
         print("\n🔄 Checking for conflicts...")
         
         # Get today's date
-        today = datetime.now(tz=tz.gettz(timezone))
+        # Check July 7 instead of today
+        today = datetime(2025, 7, 7, tzinfo=tz.gettz(timezone))
         start = today.replace(hour=0, minute=0, second=0, microsecond=0)
         end = today.replace(hour=23, minute=59, second=59, microsecond=999999)
         
