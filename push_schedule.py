@@ -56,7 +56,7 @@ try:
     print("✓ Loaded personal schedule from my_schedule.py")
 except ImportError:
     try:
-        from schedule_data import schedule
+        from schedule_data import schedule # type: ignore
         print("✓ Loaded schedule from schedule_data.py")
     except ImportError:
         print("⚠️  No schedule file found. Using default schedule.")
@@ -215,15 +215,15 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
     # 1. Build Calendar service
     try:
         svc = get_calendar_service()
-        print("✓ Service ready")
-        print(f"🌍 Timezone: {timezone}")
+        print("[+] Service ready")
+        print(f"[*] Timezone: {timezone}")
     except Exception as e:
-        print(f"✗ Failed to initialize service: {e}")
+        print(f"[!] Failed to initialize service: {e}")
         return 1
     
     # Handle mark-done mode
     if mark_done:
-        print(f"✅ Marking events as done: '{mark_done}'")
+        print(f"[*] Marking events as done: '{mark_done}'")
         # Search for events today
         today = datetime.now(tz=tz.gettz(timezone))
         start = today.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -241,9 +241,9 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
         for event in events:
             if mark_event_complete(svc, event["id"], event, config):
                 marked += 1
-                print(f"  ✓ Marked: {event['summary']}")
+                print(f"  [+] Marked: {event['summary']}")
         
-        print(f"✓ Marked {marked} event(s) as complete")
+        print(f"[+] Marked {marked} event(s) as complete")
         return 0
     
     # 2. Check if schedule has events
