@@ -759,7 +759,6 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
     # ─────────────────── CLEAR MODE ───────────────────
     if clear_mode:
         print("🗑️  Clear mode: Removing events in schedule range...")
-        # 1) Fetch existing events in the date span from YOUR calendar
         existing_events = api_call_with_retry(
             lambda: svc.events().list(
                 calendarId=CALENDAR_ID,
@@ -770,45 +769,58 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
             ).execute()
         ).get("items", [])
 
-        # 2) Build the set of fingerprints for your schedule entries
-        schedule_fingerprints = set()
-        for title, y, m, d, sh, sm, eh, em in schedule:
-            st = datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone))
-            en = datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone))
-            schedule_fingerprints.add((title, iso(st), iso(en)))
+        # Build fingerprints
+        schedule_fps = {
+            (title, iso(datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone))),
+                    iso(datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone))))
+            for title, y, m, d, sh, sm, eh, em in schedule
+        }
 
-        # 3) Identify which calendar events match those fingerprints
-        events_to_delete = []
-        for e in existing_events:
-            if "summary" in e and "start" in e and "end" in e:
-                fp = (
-                    e["summary"].replace("✓ ", ""),
-                    e["start"]["dateTime"],
-                    e["end"]["dateTime"]
-                )
-                if fp in schedule_fingerprints:
-                    events_to_delete.append(e)
+        to_delete = [
+            e for e in existing_events
+            if (
+                e.get("summary","").replace("✓ ",""),
+                e["start"].get("dateTime",""),
+                e["end"].get("dateTime","")
+            ) in schedule_fps
+        ]
 
-        # 4) Delete them (or skip in dry‐run)
-        if events_to_delete:
-            print(f"Found {len(events_to_delete)} matching event(s) to delete")
-            if dry_run:
-                print("(Dry run - no events deleted)")
-            else:
-                for e in events_to_delete:
-                    try:
-                        api_call_with_retry(
-                            lambda: svc.events().delete(
-                                calendarId=CALENDAR_ID,
-                                eventId=e["id"]
-                            ).execute()
-                        )
-                    except Exception as exc:
-                        print(f"  ✗ Error deleting {e['summary']}: {exc}")
-                print(f"✓ Deleted {len(events_to_delete)} event(s)")
-        else:
+        count = len(to_delete)
+        print(f"Found {count} matching event(s) to delete")
+        if not to_delete:
             print("No matching events to delete")
+            return 0
+
+        if dry_run:
+            print("(Dry run – no events deleted)")
+            return 0
+
+        # Batch-delete in chunks of 50
+        from googleapiclient.http import BatchHttpRequest
+
+        def delete_cb(request_id, response, exception):
+            if exception:
+                print(f"  ✗ Error deleting request {request_id}: {exception}")
+
+        batch_size = 50
+        for i in range(0, count, batch_size):
+            batch = svc.new_batch_http_request(callback=delete_cb)
+            chunk = to_delete[i : i + batch_size]
+            for idx, e in enumerate(chunk, start=i+1):
+                batch.add(
+                    svc.events().delete(
+                        calendarId=CALENDAR_ID,
+                        eventId=e["id"]
+                    ),
+                    request_id=str(idx)
+                )
+            print(f"  • Sending batch {i//batch_size + 1} (deleting {len(chunk)} events)...", end="", flush=True)
+            batch.execute()
+            print(" done")
+
+        print(f"✓ Deleted {count} event(s)")
         return 0
+
 
     
     # 5. Get existing events
