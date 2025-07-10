@@ -71,7 +71,7 @@ CALENDAR_ID = config.get("calendar_id", "primary")
 
 # Format: ('Event Name', year, month, day, start_hour, start_min, end_hour, end_min)
 try:
-    from my_schedule import schedule  # type: ignore
+    from my_ramped_schedule import schedule  # type: ignore
     print("✓ Loaded personal schedule from my_schedule.py")
 except ImportError:
     try:
@@ -756,9 +756,10 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
     
     print(f"📅 Schedule range: {start_time.date()} to {end_time.date()}")
 
-    # 4. Clear mode - delete events in range
+    # ─────────────────── CLEAR MODE ───────────────────
     if clear_mode:
         print("🗑️  Clear mode: Removing events in schedule range...")
+        # 1) Fetch existing events in the date span from YOUR calendar
         existing_events = api_call_with_retry(
             lambda: svc.events().list(
                 calendarId=CALENDAR_ID,
@@ -768,26 +769,47 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
                 singleEvents=True
             ).execute()
         ).get("items", [])
-        
-        # Only delete events with exact fingerprint match (title + time)
+
+        # 2) Build the set of fingerprints for your schedule entries
         schedule_fingerprints = set()
-        for s in schedule:
-            title, y, m, d, sh, sm, eh, em = s
-            start = datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone))
-            end = datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone))
-            fingerprint = (title, iso(start), iso(end))
-            schedule_fingerprints.add(fingerprint)
-        
+        for title, y, m, d, sh, sm, eh, em in schedule:
+            st = datetime(y, m, d, sh, sm, tzinfo=tz.gettz(timezone))
+            en = datetime(y, m, d, eh, em, tzinfo=tz.gettz(timezone))
+            schedule_fingerprints.add((title, iso(st), iso(en)))
+
+        # 3) Identify which calendar events match those fingerprints
         events_to_delete = []
         for e in existing_events:
             if "summary" in e and "start" in e and "end" in e:
-                event_fingerprint = (
+                fp = (
                     e["summary"].replace("✓ ", ""),
                     e["start"]["dateTime"],
                     e["end"]["dateTime"]
                 )
-                if event_fingerprint in schedule_fingerprints:
+                if fp in schedule_fingerprints:
                     events_to_delete.append(e)
+
+        # 4) Delete them (or skip in dry‐run)
+        if events_to_delete:
+            print(f"Found {len(events_to_delete)} matching event(s) to delete")
+            if dry_run:
+                print("(Dry run - no events deleted)")
+            else:
+                for e in events_to_delete:
+                    try:
+                        api_call_with_retry(
+                            lambda: svc.events().delete(
+                                calendarId=CALENDAR_ID,
+                                eventId=e["id"]
+                            ).execute()
+                        )
+                    except Exception as exc:
+                        print(f"  ✗ Error deleting {e['summary']}: {exc}")
+                print(f"✓ Deleted {len(events_to_delete)} event(s)")
+        else:
+            print("No matching events to delete")
+        return 0
+
     
     # 5. Get existing events
     existing = get_existing_events(svc, start_time, end_time)
