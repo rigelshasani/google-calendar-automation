@@ -18,7 +18,6 @@ from httplib2 import Http
 # ─────────────────── CONFIG ───────────────────
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CONFIG_FILE = "config.json"
-CALENDAR_ID = config.get("calendar_id", "primary")
 
 
 # Default configuration (fallback)
