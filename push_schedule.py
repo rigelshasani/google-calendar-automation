@@ -22,6 +22,7 @@ CONFIG_FILE = "config.json"
 
 # Default configuration (fallback)
 DEFAULT_CONFIG = {
+    "calendar_id": "primary",  
     "timezone": "Europe/Tirane",
     "color_scheme": {
         "Spanish video": "10",
