@@ -66,8 +66,8 @@ except Exception as e:
     print(f"⚠️  Failed to load {CONFIG_FILE}, using DEFAULT_CONFIG. Reason: {e}")
     config = DEFAULT_CONFIG
 
-    # pull the calendar ID
-    CALENDAR_ID = config.get("calendar_id", "primary")
+# Now that config exists in either case, pull the calendar ID
+CALENDAR_ID = config.get("calendar_id", "primary")
 
 # Format: ('Event Name', year, month, day, start_hour, start_min, end_hour, end_min)
 try:
