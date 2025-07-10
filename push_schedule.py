@@ -18,6 +18,8 @@ from httplib2 import Http
 # ─────────────────── CONFIG ───────────────────
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CONFIG_FILE = "config.json"
+CALENDAR_ID = config.get("calendar_id", "primary")
+
 
 # Default configuration (fallback)
 DEFAULT_CONFIG = {
@@ -63,6 +65,9 @@ try:
 except Exception as e:
     print(f"⚠️  Failed to load {CONFIG_FILE}, using DEFAULT_CONFIG. Reason: {e}")
     config = DEFAULT_CONFIG
+
+    # pull the calendar ID
+    CALENDAR_ID = config.get("calendar_id", "primary")
 
 # Format: ('Event Name', year, month, day, start_hour, start_min, end_hour, end_min)
 try:
@@ -185,7 +190,7 @@ def get_existing_events(service, start_time: datetime, end_time: datetime) -> Se
         try:
             events_result = api_call_with_retry(
                 lambda: service.events().list(
-                    calendarId="primary",
+                    calendarId=CALENDAR_ID,
                     timeMin=iso(start_time),
                     timeMax=iso(end_time),
                     maxResults=2500,
@@ -222,7 +227,7 @@ def get_all_calendar_events(service, start_time: datetime, end_time: datetime) -
         try:
             events_result = api_call_with_retry(
                 lambda: service.events().list(
-                    calendarId="primary",
+                    calendarId=CALENDAR_ID,
                     timeMin=iso(start_time),
                     timeMax=iso(end_time),
                     maxResults=2500,
@@ -544,7 +549,7 @@ def mark_event_complete(service, event_id: str, event: dict, config: Dict) -> bo
         # Update the event
         api_call_with_retry(
             lambda: service.events().update(
-                calendarId="primary",
+                calendarId=CALENDAR_ID,
                 eventId=event_id,
                 body=event
             ).execute()
@@ -646,7 +651,7 @@ def handle_conflicts(
                     try:
                         api_call_with_retry(
                             lambda: service.events()
-                            .update(calendarId="primary", eventId=cal_event["id"], body=cal_event)
+                            .update(calendarId=CALENDAR_ID, eventId=cal_event["id"], body=cal_event)
                             .execute()
                         )
                         rescheduled.append(
@@ -715,7 +720,7 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
         
         events = api_call_with_retry(
             lambda: svc.events().list(
-                calendarId="primary",
+                calendarId=CALENDAR_ID,
                 timeMin=iso(start),
                 timeMax=iso(end),
                 q=mark_done,
@@ -756,7 +761,7 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
         print("🗑️  Clear mode: Removing events in schedule range...")
         existing_events = api_call_with_retry(
             lambda: svc.events().list(
-                calendarId="primary",
+                calendarId=CALENDAR_ID,
                 timeMin=iso(start_time),
                 timeMax=iso(end_time),
                 maxResults=2500,
@@ -872,7 +877,7 @@ def main(dry_run: bool = False, clear_mode: bool = False, mark_done: Optional[st
                             raise  # Stop the batch
                 
                 for event in batch_events:
-                    batch.add(svc.events().insert(calendarId="primary", body=event), callback=callback)
+                    batch.add(svc.events().insert(calendarId=CALENDAR_ID, body=event), callback=callback)
                 
                 try:
                     batch.execute()
