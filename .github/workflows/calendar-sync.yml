@@ -8,6 +8,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
 
@@ -20,50 +21,38 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Create config files
+      - name: Create config & schedule
         env:
           SERVICE_ACCOUNT_KEY: ${{ secrets.SERVICE_ACCOUNT_KEY }}
           CALENDAR_CONFIG:   ${{ secrets.CALENDAR_CONFIG }}
           MY_SCHEDULE:       ${{ secrets.MY_SCHEDULE }}
         run: |
-          # Create service account file
           echo "$SERVICE_ACCOUNT_KEY" > service-account-key.json
+          echo "$CALENDAR_CONFIG"  > config.json
+          echo "$MY_SCHEDULE"      > my_schedule.py
 
-          # Create configuration file that push_schedule.py expects
-          echo "$CALENDAR_CONFIG" > config.json
-
-          # Create schedule file
-          echo "$MY_SCHEDULE" > my_schedule.py
-
-          # Generate token.pickle from service account
           cat > create_token.py << 'EOF'
-          import pickle
-          import json
+          import pickle, json
           from google.oauth2 import service_account
-          # Load service account
-          with open('service-account-key.json', 'r') as f:
-              service_account_info = json.load(f)
 
-            # Create credentials
+          with open('service-account-key.json') as f:
+              info = json.load(f)
           creds = service_account.Credentials.from_service_account_info(
-              service_account_info,
-              scopes=['https://www.googleapis.com/auth/calendar']
+              info, scopes=['https://www.googleapis.com/auth/calendar']
           )
-
-          # Save as token.pickle (what push_schedule.py expects)
-          with open('token.pickle', 'wb') as t:
+          with open('token.pickle','wb') as t:
               pickle.dump(creds, t)
-              print("Created token.pickle from service account")
           EOF
-
           python create_token.py
-          echo "Files created:"
-          ls -la *.json *.py *.pickle
 
       - name: Show loaded schedule
         run: |
           python -c "from my_schedule import schedule; print('Schedule loaded in CI:', schedule)"
 
-      - name: Run calendar update
+      - name: Dry-run push for new events
         run: |
-          python push_schedule.py --sync --auto-reschedule
+          python push_schedule.py --dry-run
+
+      - name: Push new schedule to Google Calendar
+        run: |
+          python push_schedule.py
