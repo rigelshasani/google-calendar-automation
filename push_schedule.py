@@ -17,32 +17,32 @@ from httplib2 import Http
 
 # ─────────────────── CONFIG ───────────────────
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
-CONFIG_FILE = "calendar_config.json"
+CONFIG_FILE = "config.json"
 
-# Default configuration
+# Default configuration (fallback)
 DEFAULT_CONFIG = {
     "timezone": "Europe/Tirane",
     "color_scheme": {
-        "Spanish video": "10",      # Basil (green)
-        "Spanish writing": "10",    # Basil (green)
-        "Spanish podcast": "10",    # Basil (green)
-        "Deep Work 1": "9",         # Blueberry (blue)
-        "Deep Work 2": "9",         # Blueberry (blue)
-        "Deep Work 1 (deload)": "1", # Lavender (light blue)
-        "Guitar practice": "6",      # Tangerine (orange)
-        "Guitar free play": "6",     # Tangerine (orange)
-        "Light analytics": "7",      # Peacock (teal)
-        "Gym": "11",                # Tomato (red)
-        "Gym (deload)": "4",        # Flamingo (light red)
-        "Reflection": "5",          # Banana (yellow)
-        "Family walk / light analytics": "8", # Graphite (gray)
-        "default": "1"              # Lavender for unknown events
+        "Spanish video": "10",
+        "Spanish writing": "10",
+        "Spanish podcast": "10",
+        "Deep Work 1": "9",
+        "Deep Work 2": "9",
+        "Deep Work 1 (deload)": "1",
+        "Guitar practice": "6",
+        "Guitar free play": "6",
+        "Light analytics": "7",
+        "Gym": "11",
+        "Gym (deload)": "4",
+        "Reflection": "5",
+        "Family walk / light analytics": "8",
+        "default": "1"
     },
     "batch_size": 50,
-    "add_completion_prefix": True,  # Add ✓ prefix when marking done
+    "add_completion_prefix": True,
     "completion_strategies": {
         "enabled": True,
-        "method": "color_change"    # or "title_prefix" or "description"
+        "method": "color_change"
     },
     "conflict_resolution": {
         "enabled": True,
@@ -55,10 +55,14 @@ DEFAULT_CONFIG = {
     }
 }
 
-# Google Calendar Color IDs:
-# 1: Lavender, 2: Sage, 3: Grape, 4: Flamingo
-# 5: Banana, 6: Tangerine, 7: Peacock, 8: Graphite
-# 9: Blueberry, 10: Basil, 11: Tomato
+# Load configuration from file or fallback
+try:
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    print(f"✓ Loaded configuration from {CONFIG_FILE}")
+except Exception as e:
+    print(f"⚠️  Failed to load {CONFIG_FILE}, using DEFAULT_CONFIG. Reason: {e}")
+    config = DEFAULT_CONFIG
 
 # Format: ('Event Name', year, month, day, start_hour, start_min, end_hour, end_min)
 try:

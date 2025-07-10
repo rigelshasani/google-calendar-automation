@@ -31,6 +31,8 @@ ENV/
 # Personal schedule data
 my_schedule.py
 personal_schedule.py
+my_updated_schedule.py
+my_ramped_schedule.py
 
 # ADD THESE - Security sensitive files
 service-account-key.json
